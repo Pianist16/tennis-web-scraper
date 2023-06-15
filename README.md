@@ -3,4 +3,4 @@ This repository contains python module that scrapes tennis matches statistics fr
 
 The code makes use of mainly selenium and pandas packages.
 
-See the attached csv file with scraped Indian wells 2023 tournament's matches.
+See attached indian-wells-2023.csv file with scraped Indian wells 2023 tournament's matches.

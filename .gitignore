@@ -1,0 +1,4 @@
+
+# Generated scraper output
+*.csv
+!archive/*.csv

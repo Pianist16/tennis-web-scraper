@@ -1,8 +1,16 @@
 # tennis-web-scraper
-This repository contains python module that scrapes tennis matches statistics from flashscore.com web site and saves collected data into a csv file.
 
-The code makes use of mainly selenium and pandas packages.
+This repository contains a Python-based web scraper for collecting tennis match statistics from the Flashscore website and exporting the results into CSV files.
 
-As an example of the output, see attached indian-wells-2023.csv file with scraped Indian wells 2023 tournament's matches.
+The project mainly uses:
+- Selenium
+- pandas
 
-You can easily add/remove match statistics depending on your needs and also add more tournaments to scrape through, in which case one tournament will be scraped at a time.
+The scraper is designed to process one tournament at a time, while allowing easy extension to multiple tournaments and additional match statistics depending on project needs.
+
+## Sample output
+
+A sample scraped dataset for the Indian Wells 2023 tournament is available in the `archive/` folder:
+
+```text
+archive/indian-wells-2023.csv

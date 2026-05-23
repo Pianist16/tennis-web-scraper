@@ -2,3 +2,4 @@
 # Generated scraper output
 *.csv
 !archive/*.csv
+data/raw/*.csv

@@ -10,7 +10,24 @@ from selenium.webdriver.firefox.options import Options
 pd.set_option("display.max_columns", None)
 
 URL_MAIN = "https://www.flashscore.com"
-TOURNEY_LIST = ["indian-wells-2023"]
+TOURNAMENT_LIST_FILE = "data/tournament_lists/atp_tournaments.csv"
+
+YEAR_START = 2023
+YEAR_END = 2023
+ALLOWED_YEARS = None
+
+def load_tournament_list():
+    df = pd.read_csv(TOURNAMENT_LIST_FILE)
+
+    if ALLOWED_YEARS is not None:
+        df = df[df["year"].isin(ALLOWED_YEARS)]
+    else:
+        df = df[(df["year"] >= YEAR_START) & (df["year"] <= YEAR_END)]
+
+    df = df.sort_values(["year", "tourney_slug"]).reset_index(drop=True)
+
+    return df["tourney_slug"].tolist()
+
 MAX_WORKERS = 4
 
 firefox_options = Options()
@@ -85,6 +102,10 @@ def scrape_match_worker(match_index, match_flashscore_id, tourney):
 
 
 script_start = time.perf_counter()
+
+
+TOURNEY_LIST = load_tournament_list()
+print("Tournaments to scrape:", len(TOURNEY_LIST))
 
 for tourney in TOURNEY_LIST:
     tourney_start = time.perf_counter()

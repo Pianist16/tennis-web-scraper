@@ -1,9 +1,11 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from time import sleep
 import time
 
 import pandas as pd
 from selenium import webdriver
+from selenium.common.exceptions import WebDriverException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.firefox.options import Options
 
@@ -12,11 +14,46 @@ pd.set_option("display.max_columns", None)
 URL_MAIN = "https://www.flashscore.com"
 TOURNAMENT_LIST_FILE = "data/tournament_lists/atp_tournaments.csv"
 
+# Use either ALLOWED_YEARS or YEAR_START/YEAR_END.
 YEAR_START = 2023
 YEAR_END = 2023
 ALLOWED_YEARS = None
 
-def load_tournament_list():
+# 4 was measured as stable and fast on the AM4 machine.
+MAX_WORKERS = 4
+
+SKIP_EXISTING_COMPLETE = True
+GET_RETRIES = 3
+RETRY_SLEEP_SECONDS = 10
+
+firefox_options = Options()
+firefox_options.add_argument("--headless")
+
+
+def safe_get(browser, url, retries=GET_RETRIES, sleep_seconds=RETRY_SLEEP_SECONDS):
+    """Load a URL with retry protection for intermittent DNS/network failures."""
+    for attempt in range(1, retries + 1):
+        try:
+            browser.get(url)
+            return True
+
+        except WebDriverException as e:
+            print(f"GET failed attempt {attempt}/{retries}: {url}")
+            print(f"{type(e).__name__}: {str(e)[:250]}")
+
+            if attempt < retries:
+                sleep(sleep_seconds * attempt)
+
+    print(f"Giving up URL after {retries} attempts: {url}")
+    return False
+
+
+def get_text_or_empty(browser, by, value):
+    elements = browser.find_elements(by, value)
+    return elements[0].text if elements else ""
+
+
+def load_tournament_df():
     df = pd.read_csv(TOURNAMENT_LIST_FILE)
 
     if ALLOWED_YEARS is not None:
@@ -26,17 +63,27 @@ def load_tournament_list():
 
     df = df.sort_values(["year", "tourney_slug"]).reset_index(drop=True)
 
-    return df["tourney_slug"].tolist()
-
-MAX_WORKERS = 4
-
-firefox_options = Options()
-firefox_options.add_argument("--headless")
+    return df
 
 
-def get_text_or_empty(browser, by, value):
-    elements = browser.find_elements(by, value)
-    return elements[0].text if elements else ""
+def output_is_complete(filename, expected_match_count):
+    path = Path(filename)
+
+    if not path.exists():
+        return False
+
+    if expected_match_count is None or pd.isna(expected_match_count):
+        try:
+            return len(pd.read_csv(path)) > 0
+        except Exception:
+            return False
+
+    try:
+        existing_rows = len(pd.read_csv(path))
+    except Exception:
+        return False
+
+    return existing_rows >= int(expected_match_count)
 
 
 def scrape_match_worker(match_index, match_flashscore_id, tourney):
@@ -46,8 +93,13 @@ def scrape_match_worker(match_index, match_flashscore_id, tourney):
         print(f"Opening match {match_index}: {match_flashscore_id}")
 
         match_page = f"{URL_MAIN}/match/{match_flashscore_id}/"
+
+        # Small stagger reduces simultaneous request spikes.
         sleep((match_index % MAX_WORKERS) * 0.3)
-        browser.get(match_page)
+
+        if not safe_get(browser, match_page):
+            return None
+
         sleep(1.5)
 
         stats_links = browser.find_elements(By.PARTIAL_LINK_TEXT, "STATS")
@@ -57,7 +109,10 @@ def scrape_match_worker(match_index, match_flashscore_id, tourney):
             return None
 
         stats_url = stats_links[0].get_attribute("href")
-        browser.get(stats_url)
+
+        if not safe_get(browser, stats_url):
+            return None
+
         sleep(2.5)
 
         stat_rows = browser.find_elements(By.XPATH, "//div[@data-testid='wcl-statistics']")
@@ -103,20 +158,29 @@ def scrape_match_worker(match_index, match_flashscore_id, tourney):
 
 script_start = time.perf_counter()
 
+tournament_df = load_tournament_df()
+print("Tournaments to scrape:", len(tournament_df))
 
-TOURNEY_LIST = load_tournament_list()
-print("Tournaments to scrape:", len(TOURNEY_LIST))
+for _, tournament_row in tournament_df.iterrows():
+    tourney = tournament_row["tourney_slug"]
+    expected_match_count = tournament_row.get("match_count", None)
 
-for tourney in TOURNEY_LIST:
     tourney_start = time.perf_counter()
 
     tourney_results = f"{URL_MAIN}/tennis/atp-singles/{tourney}/results/"
     filename = f"data/raw/{tourney}.csv"
 
+    if SKIP_EXISTING_COMPLETE and output_is_complete(filename, expected_match_count):
+        print("Skipping existing complete CSV:", filename)
+        continue
+
     browser_results = webdriver.Firefox(options=firefox_options)
 
     try:
-        browser_results.get(tourney_results)
+        if not safe_get(browser_results, tourney_results):
+            print("Tournament page failed after retries; skipping:", tourney)
+            continue
+
         sleep(2.5)
 
         matches = browser_results.find_elements(By.CLASS_NAME, "event__match")
@@ -128,6 +192,7 @@ for tourney in TOURNEY_LIST:
 
         print(filename)
         print("Matches found:", len(match_tasks))
+        print("Expected matches:", expected_match_count)
         print("Max workers:", MAX_WORKERS)
 
     finally:
@@ -153,8 +218,16 @@ for tourney in TOURNEY_LIST:
         df = df.sort_values("match_index").reset_index(drop=True)
         df = df.drop(columns=["match_index"])
 
+        Path(filename).parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(filename, index=False)
         print("CSV written:", filename)
+
+        if expected_match_count is not None and not pd.isna(expected_match_count):
+            if len(df) < int(expected_match_count):
+                print(
+                    f"WARNING: incomplete scrape for {tourney}: "
+                    f"{len(df)} rows collected vs {int(expected_match_count)} expected matches"
+                )
     else:
         print("No match data collected; CSV not written.")
 

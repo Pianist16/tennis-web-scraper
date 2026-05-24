@@ -15,9 +15,11 @@ URL_MAIN = "https://www.flashscore.com"
 TOURNAMENT_LIST_FILE = "data/tournament_lists/atp_tournaments.csv"
 
 # Use either ALLOWED_YEARS or YEAR_START/YEAR_END.
-YEAR_START = 2023
-YEAR_END = 2023
+YEAR_START = 2000
+YEAR_END = 2026
 ALLOWED_YEARS = None
+
+MIN_COMPLETION_RATE = 0.90
 
 # 4 was measured as stable and fast on the AM4 machine.
 MAX_WORKERS = 4
@@ -72,19 +74,33 @@ def output_is_complete(filename, expected_match_count):
     if not path.exists():
         return False
 
-    if expected_match_count is None or pd.isna(expected_match_count):
-        try:
-            return len(pd.read_csv(path)) > 0
-        except Exception:
-            return False
-
     try:
         existing_rows = len(pd.read_csv(path))
     except Exception:
         return False
 
-    return existing_rows >= int(expected_match_count)
+    if expected_match_count is None or pd.isna(expected_match_count):
+        return existing_rows > 0
 
+    expected_match_count = int(expected_match_count)
+
+    if expected_match_count == 0:
+        return existing_rows > 0
+
+    completion_rate = existing_rows / expected_match_count
+
+    if completion_rate >= MIN_COMPLETION_RATE:
+        print(
+            f"Existing CSV is complete enough: {filename} "
+            f"({existing_rows}/{expected_match_count}, {completion_rate:.1%})"
+        )
+        return True
+
+    print(
+        f"Existing CSV below completion threshold: {filename} "
+        f"({existing_rows}/{expected_match_count}, {completion_rate:.1%})"
+    )
+    return False
 
 def scrape_match_worker(match_index, match_flashscore_id, tourney):
     browser = webdriver.Firefox(options=firefox_options)

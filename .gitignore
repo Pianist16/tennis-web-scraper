@@ -3,3 +3,9 @@
 *.csv
 !archive/*.csv
 data/raw/*.csv
+
+# Desktop/file-manager metadata
+.directory
+
+# LibreOffice lock files
+.~lock.*#

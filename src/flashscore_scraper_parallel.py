@@ -14,7 +14,7 @@ pd.set_option("display.max_columns", None)
 URL_MAIN = "https://www.flashscore.com"
 TOURNAMENT_LIST_FILE = "data/tournament_lists/atp_tournaments_history.csv"
 
-YEAR_START = 2020
+YEAR_START = 2022
 YEAR_END = 2025
 ALLOWED_YEARS = None
 
@@ -319,7 +319,10 @@ def scrape_match_worker(match_index, match_flashscore_id, tourney):
         }
 
     finally:
-        browser.close()
+        try:
+            browser.quit()
+        except Exception:
+            pass
 
 
 script_start = time.perf_counter()
@@ -398,7 +401,11 @@ for _, tournament_row in tournament_df.iterrows():
         ]
 
         for future in as_completed(futures):
-            result = future.result()
+            try:
+                result = future.result()
+            except Exception as e:
+                print(f"Worker future failed: {type(e).__name__}: {str(e)[:200]}")
+                continue
 
             precheck_statuses.append(result["status"])
 
@@ -427,7 +434,11 @@ for _, tournament_row in tournament_df.iterrows():
         ]
 
         for future in as_completed(futures):
-            result = future.result()
+            try:
+                result = future.result()
+            except Exception as e:
+                print(f"Worker future failed: {type(e).__name__}: {str(e)[:200]}")
+                continue
 
             if result["status"] == "ok":
                 matches_data.append(result["data"])

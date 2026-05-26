@@ -14,20 +14,20 @@ pd.set_option("display.max_columns", None)
 URL_MAIN = "https://www.flashscore.com"
 TOURNAMENT_LIST_FILE = "data/tournament_lists/atp_tournaments_history.csv"
 
-YEAR_START = 2022
+YEAR_START = 2025
 YEAR_END = 2025
 ALLOWED_YEARS = None
 
 MIN_COMPLETION_RATE = 0.90
 
-MAX_WORKERS = 4
+MAX_WORKERS = 12
 
 SKIP_EXISTING_COMPLETE = True
 
 GET_RETRIES = 3
 RETRY_SLEEP_SECONDS = 10
 
-PRECHECK_FIRST_N_MATCHES = 8
+PRECHECK_FIRST_N_MATCHES = max(8, MAX_WORKERS)
 
 firefox_options = Options()
 firefox_options.add_argument("--headless")
@@ -53,6 +53,52 @@ def safe_get(browser, url, retries=GET_RETRIES, sleep_seconds=RETRY_SLEEP_SECOND
 def get_text_or_empty(browser, by, value):
     elements = browser.find_elements(by, value)
     return elements[0].text if elements else ""
+
+
+def load_all_matches(browser, max_clicks=10):
+    last_height = 0
+
+    for _ in range(max_clicks):
+        browser.execute_script(
+            "window.scrollTo(0, document.body.scrollHeight);"
+        )
+
+        sleep(2)
+
+        buttons = browser.find_elements(
+            By.CSS_SELECTOR,
+            "button[data-testid='wcl-buttonLink']"
+        )
+
+        buttons = [
+            b for b in buttons
+            if "Show more matches" in b.text
+        ]
+
+        if not buttons:
+            new_height = browser.execute_script(
+                "return document.body.scrollHeight"
+            )
+
+            if new_height == last_height:
+                break
+
+            last_height = new_height
+            continue
+
+        try:
+            browser.execute_script(
+                "arguments[0].click();",
+                buttons[0]
+            )
+
+            print("Clicked show more")
+
+            sleep(4)
+
+        except Exception as e:
+            print(f"Show more click failed: {type(e).__name__}: {str(e)[:150]}")
+            break
 
 
 def load_tournament_df():
@@ -147,7 +193,6 @@ def extract_match_scores(browser):
     score_data["match_result_sets"] = f"{home_sets}-{away_sets}"
 
     set_strings = []
-
     sets_played = 0
 
     for set_num in range(1, 6):
@@ -202,10 +247,110 @@ def extract_match_scores(browser):
 
     return score_data
 
+def extract_match_header_metadata(browser):
+    metadata = {
+        "match_header": "",
+        "match_surface": "",
+        "match_stage": "",
+    }
 
-def scrape_match_worker(match_index, match_flashscore_id, tourney):
-    browser = webdriver.Firefox(options=firefox_options)
+    overlines = browser.find_elements(
+        By.CSS_SELECTOR,
+        "[data-testid^='wcl-scores-overline']"
+    )
 
+    for el in overlines:
+        text = el.text.strip()
+
+        if " - " not in text:
+            continue
+
+        if "," not in text:
+            continue
+
+        metadata["match_header"] = text
+
+        left_part, stage = text.rsplit(" - ", 1)
+        metadata["match_stage"] = stage.strip().title()
+
+        surface = left_part.split(",")[-1].strip().lower()
+        metadata["match_surface"] = surface
+
+        break
+
+    return metadata
+
+def open_odds_tab(browser):
+    tabs = browser.find_elements(By.XPATH, "//button[contains(., 'ODDS') or contains(., 'Odds')]")
+
+    if not tabs:
+        return False
+
+    try:
+        browser.execute_script("arguments[0].click();", tabs[0])
+        sleep(1.5)
+        return True
+    except Exception:
+        return False
+
+def extract_match_odds(browser):
+    odds_data = {
+        "odds_left": "",
+        "odds_right": "",
+        "odds_bookmaker": "",
+    }
+
+    rows = browser.find_elements(By.CSS_SELECTOR, "div.ui-table__row")
+
+    for row in rows:
+        bookmaker_link = row.find_elements(
+            By.CSS_SELECTOR,
+            ".oddsCell__bookmakerPart a[title]"
+        )
+
+        bookmaker = (
+            bookmaker_link[0].get_attribute("title").strip()
+            if bookmaker_link
+            else ""
+        )
+
+        odd_links = row.find_elements(
+            By.CSS_SELECTOR,
+            "a.oddsCell__odd"
+        )
+
+        odds = []
+
+        for odd_link in odd_links:
+
+            text = odd_link.text.strip()
+
+            if not text:
+                continue
+
+            lines = [
+                line.strip()
+                for line in text.split("\n")
+                if line.strip()
+            ]
+
+            numeric_lines = [
+                line for line in lines
+                if any(ch.isdigit() for ch in line)
+            ]
+
+            if numeric_lines:
+                odds.append(numeric_lines[-1])
+
+        if len(odds) >= 2:
+            odds_data["odds_left"] = odds[0]
+            odds_data["odds_right"] = odds[1]
+            odds_data["odds_bookmaker"] = bookmaker
+            break
+
+    return odds_data
+
+def scrape_match(browser, match_index, match_flashscore_id, tourney):
     try:
         print(f"Opening match {match_index}: {match_flashscore_id}")
 
@@ -223,6 +368,8 @@ def scrape_match_worker(match_index, match_flashscore_id, tourney):
 
         score_data = extract_match_scores(browser)
 
+        header_metadata = extract_match_header_metadata(browser)
+
         stats_links = browser.find_elements(By.PARTIAL_LINK_TEXT, "STATS")
 
         if not stats_links:
@@ -234,6 +381,9 @@ def scrape_match_worker(match_index, match_flashscore_id, tourney):
             }
 
         stats_url = stats_links[0].get_attribute("href")
+
+        open_odds_tab(browser)
+        odds_data = extract_match_odds(browser)
 
         if not safe_get(browser, stats_url):
             return {
@@ -256,7 +406,12 @@ def scrape_match_worker(match_index, match_flashscore_id, tourney):
                 "data": None
             }
 
-        row_data = {"match_index": match_index}
+        row_data = {
+            "match_index": match_index,
+            "match_flashscore_id": match_flashscore_id,
+            "match_url": match_page,
+            "tournament_slug": tourney,
+        }
 
         for row in stat_rows:
             values = row.find_elements(
@@ -295,12 +450,8 @@ def scrape_match_worker(match_index, match_flashscore_id, tourney):
         row_data["match_info"] = tourney
 
         row_data.update(score_data)
-
-        #odds_elements = browser.find_elements(By.CLASS_NAME, "oddsValue")
-        #odds = [o.text for o in odds_elements[:2]]
-
-        #row_data["odds_left"] = odds[0] if len(odds) > 0 else ""
-        #row_data["odds_right"] = odds[1] if len(odds) > 1 else ""
+        row_data.update(header_metadata)
+        row_data.update(odds_data)       
 
         return {
             "status": "ok",
@@ -317,6 +468,27 @@ def scrape_match_worker(match_index, match_flashscore_id, tourney):
             "status": "failed",
             "data": None
         }
+
+
+def scrape_match_worker(worker_id, match_tasks, tourney):
+    browser = webdriver.Firefox(options=firefox_options)
+
+    results = []
+
+    try:
+        for match_index, match_flashscore_id in match_tasks:
+            sleep((worker_id - 1) * 0.3)
+
+            result = scrape_match(
+                browser,
+                match_index,
+                match_flashscore_id,
+                tourney
+            )
+
+            results.append(result)
+
+        return results
 
     finally:
         try:
@@ -366,16 +538,26 @@ for _, tournament_row in tournament_df.iterrows():
 
         sleep(2.5)
 
-        matches = browser_results.find_elements(
-            By.CLASS_NAME,
-            "event__match"
+        load_all_matches(browser_results)
+
+        match_links = browser_results.find_elements(
+            By.CSS_SELECTOR,
+            "a.eventRowLink[id^='match-row-g_']"
         )
 
-        match_tasks = [
-            (idx, match.get_attribute("id")[4:])
-            for idx, match in enumerate(matches)
-        ]
+        match_tasks = []
 
+        for idx, link in enumerate(match_links):
+            row_id = link.get_attribute("id")
+
+            if not row_id:
+                continue
+
+            match_flashscore_id = row_id.split("_")[-1]
+
+            match_tasks.append((idx, match_flashscore_id))
+
+        print("Match row links found:", len(match_tasks))
         print(filename)
         print("Results URL:", results_url)
         print("Matches found:", len(match_tasks))
@@ -394,23 +576,36 @@ for _, tournament_row in tournament_df.iterrows():
     matches_data = []
     precheck_statuses = []
 
+    precheck_chunks = [
+        precheck_tasks[i::MAX_WORKERS]
+        for i in range(MAX_WORKERS)
+    ]
+
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = [
-            executor.submit(scrape_match_worker, idx, match_id, tourney)
-            for idx, match_id in precheck_tasks
+            executor.submit(
+                scrape_match_worker,
+                worker_id,
+                chunk,
+                tourney
+            )
+            for worker_id, chunk in enumerate(precheck_chunks, start=1)
+            if chunk
         ]
 
         for future in as_completed(futures):
             try:
-                result = future.result()
+                worker_results = future.result()
+
+                for result in worker_results:
+                    precheck_statuses.append(result["status"])
+
+                    if result["status"] == "ok":
+                        matches_data.append(result["data"])
+
             except Exception as e:
                 print(f"Worker future failed: {type(e).__name__}: {str(e)[:200]}")
                 continue
-
-            precheck_statuses.append(result["status"])
-
-            if result["status"] == "ok":
-                matches_data.append(result["data"])
 
     print("Precheck statuses:", precheck_statuses)
 
@@ -427,21 +622,34 @@ for _, tournament_row in tournament_df.iterrows():
 
     remaining_tasks = match_tasks[PRECHECK_FIRST_N_MATCHES:]
 
+    remaining_chunks = [
+        remaining_tasks[i::MAX_WORKERS]
+        for i in range(MAX_WORKERS)
+    ]
+
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = [
-            executor.submit(scrape_match_worker, idx, match_id, tourney)
-            for idx, match_id in remaining_tasks
+            executor.submit(
+                scrape_match_worker,
+                worker_id,
+                chunk,
+                tourney
+            )
+            for worker_id, chunk in enumerate(remaining_chunks, start=1)
+            if chunk
         ]
 
         for future in as_completed(futures):
             try:
-                result = future.result()
+                worker_results = future.result()
+
+                for result in worker_results:
+                    if result["status"] == "ok":
+                        matches_data.append(result["data"])
+
             except Exception as e:
                 print(f"Worker future failed: {type(e).__name__}: {str(e)[:200]}")
                 continue
-
-            if result["status"] == "ok":
-                matches_data.append(result["data"])
 
     print("Rows collected:", len(matches_data))
 

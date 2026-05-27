@@ -9,3 +9,4 @@ data/raw/*.csv
 
 # LibreOffice lock files
 .~lock.*#
+data/raw/*.csv

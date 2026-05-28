@@ -1,48 +1,175 @@
 # tennis-web-scraper
 
-Python-based web scraping pipeline for collecting professional ATP tennis match data and statistics from Flashscore.
+Python-based web scraping pipeline for collecting ATP tennis match statistics and metadata from Flashscore.com.
 
-The project uses:
+The repository focuses on:
 
-- Python
-- Selenium
-- pandas
-- Docker
-- VS Code Dev Containers
-
----
-
-## Features
-
-The scraper currently supports:
-
-- Tournament history scraping
-- Match statistics scraping
-- Match score extraction
-- Set-by-set score parsing
-- Tiebreak score parsing
-- Parallel multi-worker scraping
-- Structured CSV export
-
-Collected statistics include:
-
-- Aces
-- Double faults
-- First serve percentage
-- Break points saved/converted
-- Service points won
-- Return points won
-- Winners
-- Unforced errors
-- Net points won
-- Match points saved
-- And more
+* historical ATP match collection,
+* structured statistical extraction,
+* reproducible scraping workflows,
+* large-scale dataset generation for downstream analytics and machine learning.
 
 ---
 
-## Match Score Support
+# Technology Stack
+
+* Python
+* Selenium
+* pandas
+* Docker
+* VS Code Dev Containers
+
+---
+
+# Main Scripts
+
+## Tournament History Scraper
+
+```text
+src/flashscore_tournament_history_scraper_parallel.py
+```
+
+Builds the historical tournament index from Flashscore archives.
+
+Outputs:
+
+```text
+data/tournament_lists/atp_tournaments_history.csv
+```
+
+The generated file contains:
+
+* tournament names,
+* tournament slugs,
+* yearly editions,
+* results URLs,
+* archive URLs,
+* expected match counts.
+
+This file acts as the primary input source for downstream match scraping.
+
+---
+
+## Automatic Match Scraper
+
+```text
+src/flashscore_scraper_parallel.py
+```
+
+Bulk scraper for historical tournament match statistics.
+
+Main functionality:
+
+* loads tournament history index,
+* scrapes tournament result pages,
+* extracts match-level statistics,
+* extracts scorelines and tiebreaks,
+* exports structured CSV datasets.
+
+Supports:
+
+* multi-worker parallel scraping,
+* retry handling,
+* automatic skipping of already-complete datasets,
+* current/latest tournament routing logic.
+
+Outputs:
+
+```text
+data/raw/<tournament-year>.csv
+```
+
+Example:
+
+```text
+data/raw/french-open-2025.csv
+```
+
+---
+
+## Manual Tournament Scraper
+
+```text
+src/flashscore_scraper_manual_tournaments.py
+```
+
+Targeted scraper for ad hoc tournament scraping.
+
+Useful for:
+
+* incremental database updates,
+* ongoing tournaments,
+* rerunning failed tournaments,
+* debugging,
+* testing scraper changes.
+
+Configured via:
+
+```python
+TOURNAMENT_SLUGS = [
+    "french-open",
+    "wimbledon",
+]
+
+YEARS = [
+    2025,
+]
+```
+
+---
+
+# Project Structure
+
+```text
+src/
+    flashscore_tournament_history_scraper_parallel.py
+    flashscore_scraper_parallel.py
+    flashscore_scraper_manual_tournaments.py
+
+data/
+    raw/
+        Tournament CSV datasets
+
+    tournament_lists/
+        Tournament history index CSV
+
+archive/
+    Older scripts and experiments
+```
+
+---
+
+# Extracted Data
 
 The scraper extracts:
+
+* player names,
+* match dates,
+* tournament metadata,
+* match scores,
+* set-by-set scores,
+* tiebreak scores,
+* bookmaker odds,
+* match statistics.
+
+Examples of extracted statistics:
+
+* Aces
+* Double Faults
+* 1st Serve %
+* Service Points Won
+* Return Points Won
+* Break Points Saved
+* Break Points Converted
+* Winners
+* Unforced Errors
+* Net Points Won
+
+---
+
+# Match Score Support
+
+Examples:
 
 ```text
 7-6(7-4) 6-4
@@ -51,71 +178,148 @@ The scraper extracts:
 
 Supports:
 
-- Best-of-3 matches
-- Best-of-5 matches
-- Tiebreak parsing
+* best-of-3 matches,
+* best-of-5 matches,
+* tiebreak parsing.
 
 ---
 
-## Project Structure
+# Parallel Scraping Notes
 
-```text
-src/
-    flashscore_tournament_history_scraper_parallel.py
-    flashscore_scraper_parallel.py
+Main worker configuration:
 
-data/raw/
-    Scraped tournament CSV files
-
-archive/
-    Older scripts and experiments
+```python
+MAX_WORKERS = 8
 ```
 
+Recommended settings:
+
+* stable mode: ~50% of total logical CPU cores,
+* aggressive mode: ~75% of logical CPU cores.
+
+Example:
+* 16-core / 32-thread systems: typically stable around 8-12 workers.
+
+Higher worker counts increase:
+
+* Selenium/geckodriver instability,
+* browser crashes,
+* network failures,
+* Flashscore throttling risk.
+
+MAX_WORKERS is constrained more by Selenium/network stability than raw CPU compute.
+
 ---
 
-## Development Environment
+# Networking Notes
 
-The project uses a containerized Docker + VS Code Dev Container workflow for reproducible development across systems.
+VPNs, ad-blockers, DNS filters, and traffic-routing tools can interfere with Selenium networking.
+
+Examples:
+
+* WireGuard VPNs,
+* Pi-hole,
+* browser-level ad blockers,
+* router-level DNS filtering.
+
+Symptoms:
+
+* geckodriver crashes,
+* failed page loads,
+* partial tournament scraping,
+* empty match lists.
+
+If instability appears:
+
+* reduce `MAX_WORKERS`,
+* temporarily disable VPN/ad-blocking,
+* test direct outbound connectivity.
+
+---
+
+# Existing Dataset Handling
+
+The scraper supports automatic skipping of already-complete datasets:
+
+```python
+SKIP_EXISTING_COMPLETE = True
+```
+
+This prevents unnecessary re-scraping of tournaments that already meet completion thresholds.
+
+---
+
+# Flashscore Routing Notes
+
+Flashscore uses inconsistent routing for the latest/current tournament editions.
+
+Examples:
+
+```text
+historical:
+wimbledon-2024
+
+latest/current:
+wimbledon
+```
+
+The scraper includes logic for:
+
+* historical year-specific tournament routing,
+* latest-edition SUMMARY routing,
+* automatic fallback handling.
+
+This is particularly important for:
+
+* ongoing seasons,
+* recently completed tournaments,
+* incremental database maintenance.
+
+---
+
+# Historical Data Coverage Notes
+
+Match statistics availability varies significantly across years.
+
+Observed behavior:
+
+* 2012-2017:
+  statistics often limited to later rounds
+  (quarterfinals, semifinals, finals).
+
+* 2018+:
+  statistics become available for most ATP matches.
+
+Because of this:
+
+* earlier seasons are less statistically complete,
+* modern seasons are significantly higher quality for ML applications.
+
+---
+
+# Development Environment
+
+The repository uses a containerized Docker + VS Code Dev Container workflow for reproducible development across systems.
 
 Requirements:
 
-- Docker
-- VS Code
-- Dev Containers extension
+* Docker
+* VS Code
+* Dev Containers extension
 
 ---
 
-## Sample Output
+# Purpose
 
-Example datasets:
+This repository acts primarily as a data collection pipeline for:
 
-```text
-data/raw/acapulco-2020.csv
-data/raw/adelaide-2020.csv
-```
-
-Each dataset contains:
-
-- Match statistics
-- Player names
-- Match scores
-- Set scores
-- Tiebreak information
-- Tournament metadata
+* tennis analytics,
+* Elo modeling,
+* machine learning,
+* match prediction research.
 
 ---
 
-## Purpose
-
-This repository serves as the data collection pipeline for downstream:
-
-- Tennis analytics
-- Elo modeling
-- Machine learning
-- Match prediction research
-
----
-
-## Status
+# Status
 
 Active development.

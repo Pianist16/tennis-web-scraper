@@ -14,15 +14,21 @@ pd.set_option("display.max_columns", None)
 URL_MAIN = "https://www.flashscore.com"
 TOURNAMENT_LIST_FILE = "data/tournament_lists/atp_tournaments_history.csv"
 
-YEAR_START = 2025
-YEAR_END = 2026
-ALLOWED_YEARS = None
+TOURNAMENT_SLUGS = [
+    "french-open",
+    "wimbledon",
+]
+
+YEARS = [
+    2025,
+]
+
 
 MIN_COMPLETION_RATE = 0.90
 
 MAX_WORKERS = 8
 
-SKIP_EXISTING_COMPLETE = True
+SKIP_EXISTING_COMPLETE = False
 
 GET_RETRIES = 3
 RETRY_SLEEP_SECONDS = 10
@@ -102,80 +108,69 @@ def load_all_matches(browser, max_clicks=10):
 
 
 def load_tournament_df():
-    df = pd.read_csv(TOURNAMENT_LIST_FILE)
+    history_df = pd.read_csv(TOURNAMENT_LIST_FILE)
 
-    df["year_numeric"] = pd.to_numeric(
-        df["year"],
+    history_df["year_numeric"] = pd.to_numeric(
+        history_df["year"],
         errors="coerce"
     )
 
-    if ALLOWED_YEARS is not None:
-        years_to_scrape = sorted(ALLOWED_YEARS)
-    else:
-        years_to_scrape = list(range(YEAR_START, YEAR_END + 1))
+    rows = []
 
-    year_mask = df["year_numeric"].notna()
+    for year in YEARS:
+        for base_slug in TOURNAMENT_SLUGS:
 
-    exact_df = df.loc[year_mask].copy()
-    exact_df["year"] = exact_df["year_numeric"].astype(int)
+            year_mask = history_df["year_numeric"].notna()
 
-    exact_df = exact_df[
-        exact_df["year"].isin(years_to_scrape)
-    ].copy()
+            matches = history_df.loc[year_mask].copy()
 
-    rows = exact_df.to_dict("records")
+            matches["year_int"] = matches["year_numeric"].astype(int)
 
-    existing_pairs = set(
-        zip(
-            exact_df["base_slug"],
-            exact_df["year"]
-        )
-    )
+            matches = matches[
+                matches["base_slug"].eq(base_slug)
+                & matches["year_int"].eq(year)
+            ]
 
-    summary_df = df[
-        df["year_numeric"].isna()
-        & df["base_slug"].notna()
-    ].copy()
+            if not matches.empty:
+                row = matches.iloc[0].to_dict()
+                row["year"] = year
+                row["output_slug"] = f"{base_slug}-{year}"
+                rows.append(row)
+                continue
 
-    for _, summary_row in summary_df.iterrows():
-        base_slug = summary_row["base_slug"]
+            summary_match = history_df[
+                history_df["base_slug"].eq(base_slug)
+                & history_df["year_numeric"].isna()
+            ]
 
-        historical_years = df[
-            df["base_slug"].eq(base_slug)
-            & df["year_numeric"].notna()
-        ]["year_numeric"]
+            if not summary_match.empty:
+                historical_years = history_df[
+                    history_df["base_slug"].eq(base_slug)
+                    & history_df["year_numeric"].notna()
+                ]["year_numeric"]
 
-        if historical_years.empty:
-            continue
+                if not historical_years.empty:
+                    summary_year = int(historical_years.max()) + 1
 
-        summary_year = int(historical_years.max()) + 1
+                    if summary_year == year:
+                        row = summary_match.iloc[0].to_dict()
+                        row["year"] = year
+                        row["output_slug"] = f"{base_slug}-{year}"
+                        rows.append(row)
+                        continue
 
-        if summary_year not in years_to_scrape:
-            continue
+            tourney_slug = f"{base_slug}-{year}"
 
-        if (base_slug, summary_year) in existing_pairs:
-            continue
+            rows.append({
+                "year": year,
+                "base_slug": base_slug,
+                "tourney_slug": tourney_slug,
+                "output_slug": f"{base_slug}-{year}",
+                "results_url": f"{URL_MAIN}/tennis/atp-singles/{tourney_slug}/results/",
+                "match_count": None,
+            })
 
-        row = summary_row.to_dict()
-        row["year"] = summary_year
-        row["output_slug"] = f"{base_slug}-{summary_year}"
-
-        rows.append(row)
-
-    output_df = pd.DataFrame(rows)
-
-    if "output_slug" not in output_df.columns:
-        output_df["output_slug"] = output_df["tourney_slug"]
-
-    output_df["output_slug"] = output_df["output_slug"].fillna(
-        output_df["tourney_slug"]
-    )
-
-    output_df = output_df.sort_values(
-        ["year", "base_slug"]
-    ).reset_index(drop=True)
-
-    return output_df
+    return pd.DataFrame(rows)
 
 
 def output_is_complete(filename, expected_match_count):

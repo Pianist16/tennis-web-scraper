@@ -1,12 +1,14 @@
-
 # Generated scraper output
 *.csv
 !archive/*.csv
-data/raw/*.csv
+!data/raw/french-open-2025.csv
+!data/raw/wimbledon-2025.csv
+
+# Preserve folder structure
+!data/raw/.gitkeep
 
 # Desktop/file-manager metadata
 .directory
 
 # LibreOffice lock files
 .~lock.*#
-data/raw/*.csv
